@@ -3,8 +3,8 @@ blueprint:
   name: Alarmo - Calendar access
   description: >-
     Disarms Alarmo before calendar events whose title or description
-    contains "Alarmo Off". Optionally sends mobile and persistent
-    notifications before the event and when it ends. Never arms automatically.
+    contains "Alarmo Off". Mobile notifications and persistent
+    notifications can be enabled independently. Never arms automatically.
   domain: automation
 
   input:
@@ -33,6 +33,7 @@ blueprint:
 
     marker:
       name: Event marker
+      description: Text that must appear in the event title or description.
       default: Alarmo Off
       selector:
         text:
@@ -44,24 +45,32 @@ blueprint:
       selector:
         text:
 
-    notify_start:
-      name: Notify before event
-      description: Send notifications when Alarmo is disarmed.
+    enable_mobile_notifications:
+      name: Enable mobile notifications
+      description: Send mobile notifications at event start and end.
       default: true
       selector:
         boolean:
 
-    notify_end:
-      name: Notify when event ends
-      description: Send reminders to arm Alarmo if you are away.
+    enable_persistent_disarm:
+      name: Persistent notification when disarmed
+      description: Create a Home Assistant notification when Alarmo is disarmed.
+      default: true
+      selector:
+        boolean:
+
+    enable_persistent_event_end:
+      name: Persistent notification when event ends
+      description: Create a Home Assistant reminder when the event ends.
       default: true
       selector:
         boolean:
 
 variables:
   marker: !input marker
-  notify_start: !input notify_start
-  notify_end: !input notify_end
+  enable_mobile_notifications: !input enable_mobile_notifications
+  enable_persistent_disarm: !input enable_persistent_disarm
+  enable_persistent_event_end: !input enable_persistent_event_end
   notification_service: !input notification_service
 
 triggers:
@@ -95,7 +104,7 @@ actions:
 
           - if:
               - condition: template
-                value_template: "{{ notify_start }}"
+                value_template: "{{ enable_mobile_notifications }}"
             then:
               - action: "{{ notification_service }}"
                 data:
@@ -106,6 +115,10 @@ actions:
                     The event starts at {{ trigger.calendar_event.start }}.
                     Remember that the alarm is now off.
 
+          - if:
+              - condition: template
+                value_template: "{{ enable_persistent_disarm }}"
+            then:
               - action: persistent_notification.create
                 data:
                   notification_id: alarmo_calendar_start
@@ -122,7 +135,7 @@ actions:
         sequence:
           - if:
               - condition: template
-                value_template: "{{ notify_end }}"
+                value_template: "{{ enable_mobile_notifications }}"
             then:
               - action: "{{ notification_service }}"
                 data:
@@ -131,6 +144,10 @@ actions:
                     "{{ trigger.calendar_event.summary }}" has ended.
                     Remember to arm Alarmo if you're away.
 
+          - if:
+              - condition: template
+                value_template: "{{ enable_persistent_event_end }}"
+            then:
               - action: persistent_notification.create
                 data:
                   notification_id: alarmo_calendar_end
