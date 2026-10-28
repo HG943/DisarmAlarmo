@@ -1,0 +1,99 @@
+
+blueprint:
+  name: Alarmo - Calendar access
+  description: >-
+    Disarm Alarmo before calendar events containing a marker in their
+    title or description. Notify when disarming and when the event ends.
+    Never automatically arm the alarm.
+  domain: automation
+
+  input:
+    calendar_entity:
+      name: Google Calendar
+      description: Calendar containing the relevant events.
+      selector:
+        entity:
+          filter:
+            - domain: calendar
+
+    alarm_entity:
+      name: Alarm panel
+      description: Alarmo alarm control panel to disarm.
+      selector:
+        entity:
+          filter:
+            - domain: alarm_control_panel
+
+    marker:
+      name: Event marker
+      description: Text that must appear in the event title or description.
+      default: Alarmo Off
+      selector:
+        text:
+
+    disarm_offset:
+      name: Disarm before event
+      description: >-
+        Time before the event starts. Use a negative offset,
+        e.g. -00:30:00 for 30 minutes before.
+      default: "-00:30:00"
+      selector:
+        text:
+
+    start_notification:
+      name: Disarm notification
+      description: >-
+        Actions to run after the alarm disarm command is issued.
+        Use this to notify your phone and explain why the alarm is off.
+      selector:
+        action: {}
+
+    end_notification:
+      name: End notification
+      description: >-
+        Actions to run when the marked calendar event ends.
+        Use this to remind yourself to arm the alarm if away.
+      selector:
+        action: {}
+
+variables:
+  marker: !input marker
+
+triggers:
+  - trigger: calendar
+    entity_id: !input calendar_entity
+    event: start
+    offset: !input disarm_offset
+    id: access_start
+
+  - trigger: calendar
+    entity_id: !input calendar_entity
+    event: end
+    id: access_end
+
+conditions:
+  - condition: template
+    value_template: >-
+      {% set summary = trigger.calendar_event.summary | default('', true) %}
+      {% set description = trigger.calendar_event.description | default('', true) %}
+      {{ (marker | lower) in ((summary ~ ' ' ~ description) | lower) }}
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: access_start
+        sequence:
+          - action: alarm_control_panel.alarm_disarm
+            target:
+              entity_id: !input alarm_entity
+
+          - sequence: !input start_notification
+
+      - conditions:
+          - condition: trigger
+            id: access_end
+        sequence: !input end_notification
+
+mode: queued
+max: 10
