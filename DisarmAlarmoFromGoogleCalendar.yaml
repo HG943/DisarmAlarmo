@@ -3,8 +3,9 @@ blueprint:
   name: Alarmo - Calendar access
   description: >-
     Disarms Alarmo before calendar events whose title or description
-    contains "Alarmo Off". Mobile notifications and persistent
-    notifications can be enabled independently. Never arms automatically.
+    contains "Alarmo Off". Recovers missed disarm actions after
+    Home Assistant restarts. Mobile and persistent notifications
+    can be enabled independently. Never arms automatically.
   domain: automation
 
   input:
@@ -67,13 +68,19 @@ blueprint:
         boolean:
 
 variables:
+  calendar_entity: !input calendar_entity
   marker: !input marker
+  disarm_offset: !input disarm_offset
   enable_mobile_notifications: !input enable_mobile_notifications
   enable_persistent_disarm: !input enable_persistent_disarm
   enable_persistent_event_end: !input enable_persistent_event_end
   notification_service: !input notification_service
 
 triggers:
+  - trigger: homeassistant
+    event: start
+    id: startup_recovery
+
   - trigger: calendar
     entity_id: !input calendar_entity
     event: start
@@ -88,12 +95,87 @@ triggers:
 conditions:
   - condition: template
     value_template: >-
-      {% set summary = trigger.calendar_event.summary | default('', true) %}
-      {% set description = trigger.calendar_event.description | default('', true) %}
-      {{ (marker | lower) in ((summary ~ ' ' ~ description) | lower) }}
+      {% if trigger.id == 'startup_recovery' %}
+        true
+      {% else %}
+        {% set summary = trigger.calendar_event.summary | default('', true) %}
+        {% set description = trigger.calendar_event.description | default('', true) %}
+        {{ (marker | lower) in ((summary ~ ' ' ~ description) | lower) }}
+      {% endif %}
 
 actions:
   - choose:
+      # Startup recovery: find events whose disarm time has passed
+      # but which have not yet ended.
+      - conditions:
+          - condition: trigger
+            id: startup_recovery
+        sequence:
+          - action: calendar.get_events
+            target:
+              entity_id: !input calendar_entity
+            data:
+              start_date_time: "{{ (now() - timedelta(days=2)).isoformat() }}"
+              end_date_time: "{{ (now() + timedelta(days=2)).isoformat() }}"
+            response_variable: calendar_response
+
+          - repeat:
+              for_each: >-
+                {{ calendar_response[calendar_entity]['events']
+                   | default([], true) }}
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set summary = repeat.item.summary | default('', true) %}
+                        {% set description = repeat.item.description | default('', true) %}
+                        {% set matches =
+                          (marker | lower) in
+                          ((summary ~ ' ' ~ description) | lower) %}
+                        {% set start_ts = as_timestamp(repeat.item.start, 0) %}
+                        {% set end_ts = as_timestamp(repeat.item.end, 0) %}
+                        {% set due_ts =
+                          as_timestamp(now() - as_timedelta(disarm_offset)) %}
+                        {{
+                          matches
+                          and end_ts > as_timestamp(now())
+                          and start_ts <= due_ts
+                        }}
+                  then:
+                    - action: alarm_control_panel.alarm_disarm
+                      target:
+                        entity_id: !input alarm_entity
+
+                    - if:
+                        - condition: template
+                          value_template: "{{ enable_mobile_notifications }}"
+                      then:
+                        - action: "{{ notification_service }}"
+                          data:
+                            title: "Alarmo disarmed - startup recovery"
+                            message: >-
+                              Home Assistant has restarted and recovered a
+                              missed scheduled disarm. Alarmo was disarmed
+                              for "{{ repeat.item.summary }}".
+                              Event start: {{ repeat.item.start }}.
+                              Remember that the alarm is now off.
+
+                    - if:
+                        - condition: template
+                          value_template: "{{ enable_persistent_disarm }}"
+                      then:
+                        - action: persistent_notification.create
+                          data:
+                            notification_id: alarmo_calendar_start
+                            title: "Alarmo disarmed - startup recovery"
+                            message: >-
+                              Home Assistant has restarted and recovered a
+                              missed scheduled disarm. Alarmo was disarmed
+                              for "{{ repeat.item.summary }}".
+                              Event start: {{ repeat.item.start }}.
+                              Remember that the alarm is now off.
+
+      # Normal scheduled disarm before an event.
       - conditions:
           - condition: trigger
             id: access_start
@@ -129,6 +211,7 @@ actions:
                     The event starts at {{ trigger.calendar_event.start }}.
                     Remember that the alarm is now off.
 
+      # Event end: reminders only; never arm automatically.
       - conditions:
           - condition: trigger
             id: access_end
