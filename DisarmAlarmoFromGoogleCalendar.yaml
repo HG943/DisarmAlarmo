@@ -2,9 +2,9 @@
 blueprint:
   name: Alarmo - Calendar access
   description: >-
-    Disarms Alarmo 30 minutes before calendar events whose title or
-    description contains "Alarmo Off". Sends a notification when
-    disarming and another when the event ends. Never arms automatically.
+    Disarms Alarmo before calendar events whose title or description
+    contains "Alarmo Off". Optionally sends mobile and persistent
+    notifications before the event and when it ends. Never arms automatically.
   domain: automation
 
   input:
@@ -27,8 +27,7 @@ blueprint:
     notification_service:
       name: Mobile notification service
       description: >-
-        Enter your Home Assistant notification service,
-        e.g. notify.mobile_app_your_phone.
+        Example: notify.mobile_app_your_phone
       selector:
         text:
 
@@ -45,8 +44,25 @@ blueprint:
       selector:
         text:
 
+    notify_start:
+      name: Notify before event
+      description: Send notifications when Alarmo is disarmed.
+      default: true
+      selector:
+        boolean:
+
+    notify_end:
+      name: Notify when event ends
+      description: Send reminders to arm Alarmo if you are away.
+      default: true
+      selector:
+        boolean:
+
 variables:
   marker: !input marker
+  notify_start: !input notify_start
+  notify_end: !input notify_end
+  notification_service: !input notification_service
 
 triggers:
   - trigger: calendar
@@ -77,24 +93,51 @@ actions:
             target:
               entity_id: !input alarm_entity
 
-          - action: !input notification_service
-            data:
-              title: "Alarmo disarmed"
-              message: >-
-                Alarmo was disarmed for "{{ trigger.calendar_event.summary }}".
-                The event starts at {{ trigger.calendar_event.start }}.
-                Remember that the alarm is now off.
+          - if:
+              - condition: template
+                value_template: "{{ notify_start }}"
+            then:
+              - action: "{{ notification_service }}"
+                data:
+                  title: "Alarmo disarmed"
+                  message: >-
+                    Alarmo was disarmed for
+                    "{{ trigger.calendar_event.summary }}".
+                    The event starts at {{ trigger.calendar_event.start }}.
+                    Remember that the alarm is now off.
+
+              - action: persistent_notification.create
+                data:
+                  notification_id: alarmo_calendar_start
+                  title: "Alarmo disarmed"
+                  message: >-
+                    Alarmo was disarmed for
+                    "{{ trigger.calendar_event.summary }}".
+                    The event starts at {{ trigger.calendar_event.start }}.
+                    Remember that the alarm is now off.
 
       - conditions:
           - condition: trigger
             id: access_end
         sequence:
-          - action: !input notification_service
-            data:
-              title: "Alarm reminder"
-              message: >-
-                "{{ trigger.calendar_event.summary }}" has ended.
-                Remember to arm Alarmo if you're away.
+          - if:
+              - condition: template
+                value_template: "{{ notify_end }}"
+            then:
+              - action: "{{ notification_service }}"
+                data:
+                  title: "Alarm reminder"
+                  message: >-
+                    "{{ trigger.calendar_event.summary }}" has ended.
+                    Remember to arm Alarmo if you're away.
+
+              - action: persistent_notification.create
+                data:
+                  notification_id: alarmo_calendar_end
+                  title: "Alarm reminder"
+                  message: >-
+                    "{{ trigger.calendar_event.summary }}" has ended.
+                    Remember to arm Alarmo if you're away.
 
 mode: queued
 max: 10
