@@ -3,9 +3,9 @@ blueprint:
   name: Alarmo - Calendar access
   description: >-
     Disarms Alarmo before calendar events whose title or description
-    contains "Alarmo Off". Recovers missed disarm actions after
-    Home Assistant restarts. Mobile and persistent notifications
-    can be enabled independently. Never arms automatically.
+    contains the configured marker. Includes startup recovery for
+    missed disarm triggers, code-protected disarming, and confirmation
+    of the actual Alarmo state. Never arms automatically.
   domain: automation
 
   input:
@@ -25,10 +25,16 @@ blueprint:
           filter:
             - domain: alarm_control_panel
 
+    alarm_code:
+      name: Alarmo disarm code
+      description: Code required by Alarmo to disarm the alarm.
+      selector:
+        text:
+          type: password
+
     notification_service:
       name: Mobile notification service
-      description: >-
-        Example: notify.mobile_app_your_phone
+      description: Example: notify.mobile_app_your_phone
       selector:
         text:
 
@@ -55,7 +61,7 @@ blueprint:
 
     enable_persistent_disarm:
       name: Persistent notification when disarmed
-      description: Create a Home Assistant notification when Alarmo is disarmed.
+      description: Create a Home Assistant notification after disarming.
       default: true
       selector:
         boolean:
@@ -69,6 +75,8 @@ blueprint:
 
 variables:
   calendar_entity: !input calendar_entity
+  alarm_entity: !input alarm_entity
+  alarm_code: !input alarm_code
   marker: !input marker
   disarm_offset: !input disarm_offset
   enable_mobile_notifications: !input enable_mobile_notifications
@@ -105,8 +113,10 @@ conditions:
 
 actions:
   - choose:
-      # Startup recovery: find events whose disarm time has passed
-      # but which have not yet ended.
+
+      # STARTUP RECOVERY
+      # Find events where the scheduled disarm time has passed,
+      # but the event itself has not ended.
       - conditions:
           - condition: trigger
             id: startup_recovery
@@ -145,6 +155,13 @@ actions:
                     - action: alarm_control_panel.alarm_disarm
                       target:
                         entity_id: !input alarm_entity
+                      data:
+                        code: !input alarm_code
+                      continue_on_error: true
+
+                    - wait_template: "{{ is_state(alarm_entity, 'disarmed') }}"
+                      timeout: "00:00:15"
+                      continue_on_timeout: true
 
                     - if:
                         - condition: template
@@ -152,13 +169,20 @@ actions:
                       then:
                         - action: "{{ notification_service }}"
                           data:
-                            title: "Alarmo disarmed - startup recovery"
+                            title: >-
+                              {{ 'Alarmo disarmed - confirmed'
+                                 if is_state(alarm_entity, 'disarmed')
+                                 else 'WARNING - Alarmo disarming not confirmed' }}
                             message: >-
-                              Home Assistant has restarted and recovered a
-                              missed scheduled disarm. Alarmo was disarmed
-                              for "{{ repeat.item.summary }}".
-                              Event start: {{ repeat.item.start }}.
-                              Remember that the alarm is now off.
+                              {% if is_state(alarm_entity, 'disarmed') %}
+                                CONFIRMED: Alarmo is disarmed for
+                                "{{ repeat.item.summary }}".
+                              {% else %}
+                                WARNING: Alarmo disarming could NOT be
+                                confirmed for "{{ repeat.item.summary }}".
+                                Current alarm state: {{ states(alarm_entity) }}.
+                                Please check the alarm manually!
+                              {% endif %}
 
                     - if:
                         - condition: template
@@ -167,15 +191,22 @@ actions:
                         - action: persistent_notification.create
                           data:
                             notification_id: alarmo_calendar_start
-                            title: "Alarmo disarmed - startup recovery"
+                            title: >-
+                              {{ 'Alarmo disarmed - confirmed'
+                                 if is_state(alarm_entity, 'disarmed')
+                                 else 'WARNING - Alarmo disarming not confirmed' }}
                             message: >-
-                              Home Assistant has restarted and recovered a
-                              missed scheduled disarm. Alarmo was disarmed
-                              for "{{ repeat.item.summary }}".
-                              Event start: {{ repeat.item.start }}.
-                              Remember that the alarm is now off.
+                              {% if is_state(alarm_entity, 'disarmed') %}
+                                CONFIRMED: Alarmo is disarmed for
+                                "{{ repeat.item.summary }}".
+                              {% else %}
+                                WARNING: Alarmo disarming could NOT be
+                                confirmed for "{{ repeat.item.summary }}".
+                                Current alarm state: {{ states(alarm_entity) }}.
+                                Please check the alarm manually!
+                              {% endif %}
 
-      # Normal scheduled disarm before an event.
+      # NORMAL SCHEDULED DISARM
       - conditions:
           - condition: trigger
             id: access_start
@@ -183,6 +214,13 @@ actions:
           - action: alarm_control_panel.alarm_disarm
             target:
               entity_id: !input alarm_entity
+            data:
+              code: !input alarm_code
+            continue_on_error: true
+
+          - wait_template: "{{ is_state(alarm_entity, 'disarmed') }}"
+            timeout: "00:00:15"
+            continue_on_timeout: true
 
           - if:
               - condition: template
@@ -190,12 +228,21 @@ actions:
             then:
               - action: "{{ notification_service }}"
                 data:
-                  title: "Alarmo disarmed"
+                  title: >-
+                    {{ 'Alarmo disarmed - confirmed'
+                       if is_state(alarm_entity, 'disarmed')
+                       else 'WARNING - Alarmo disarming not confirmed' }}
                   message: >-
-                    Alarmo was disarmed for
-                    "{{ trigger.calendar_event.summary }}".
-                    The event starts at {{ trigger.calendar_event.start }}.
-                    Remember that the alarm is now off.
+                    {% if is_state(alarm_entity, 'disarmed') %}
+                      CONFIRMED: Alarmo is disarmed for
+                      "{{ trigger.calendar_event.summary }}".
+                      The event starts at {{ trigger.calendar_event.start }}.
+                    {% else %}
+                      WARNING: Alarmo disarming could NOT be confirmed for
+                      "{{ trigger.calendar_event.summary }}".
+                      Current alarm state: {{ states(alarm_entity) }}.
+                      Please check the alarm manually!
+                    {% endif %}
 
           - if:
               - condition: template
@@ -204,14 +251,24 @@ actions:
               - action: persistent_notification.create
                 data:
                   notification_id: alarmo_calendar_start
-                  title: "Alarmo disarmed"
+                  title: >-
+                    {{ 'Alarmo disarmed - confirmed'
+                       if is_state(alarm_entity, 'disarmed')
+                       else 'WARNING - Alarmo disarming not confirmed' }}
                   message: >-
-                    Alarmo was disarmed for
-                    "{{ trigger.calendar_event.summary }}".
-                    The event starts at {{ trigger.calendar_event.start }}.
-                    Remember that the alarm is now off.
+                    {% if is_state(alarm_entity, 'disarmed') %}
+                      CONFIRMED: Alarmo is disarmed for
+                      "{{ trigger.calendar_event.summary }}".
+                      The event starts at {{ trigger.calendar_event.start }}.
+                    {% else %}
+                      WARNING: Alarmo disarming could NOT be confirmed for
+                      "{{ trigger.calendar_event.summary }}".
+                      Current alarm state: {{ states(alarm_entity) }}.
+                      Please check the alarm manually!
+                    {% endif %}
 
-      # Event end: reminders only; never arm automatically.
+      # EVENT END
+      # Notifications only. Never arm the alarm.
       - conditions:
           - condition: trigger
             id: access_end
